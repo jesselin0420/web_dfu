@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DFU Download Image Tool</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --surface: #16181c;
+    --surface2: #1d2026;
+    --border: rgba(255,255,255,0.07);
+    --border-accent: rgba(56,189,248,0.35);
+    --text: #e8eaf0;
+    --text-muted: #6b7280;
+    --text-dim: #4b5563;
+    --accent: #38bdf8;
+    --accent-dim: rgba(56,189,248,0.12);
+    --accent-glow: rgba(56,189,248,0.08);
+    --green: #4ade80;
+    --green-dim: rgba(74,222,128,0.12);
+    --red: #f87171;
+    --red-dim: rgba(248,113,113,0.12);
+    --amber: #fbbf24;
+    --amber-dim: rgba(251,191,36,0.12);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --mono: 'JetBrains Mono', 'Fira Mono', 'Cascadia Code', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 32px 20px 48px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  .header-icon {
+    width: 40px; height: 40px;
+    background: var(--accent-dim);
+    border: 1px solid var(--border-accent);
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .header-icon svg { color: var(--accent); }
+  .header-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+  .header-sub { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
+  .badge {
+    margin-left: auto;
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid var(--border-accent);
+  }
+
+  /* ── Layout ── */
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 14px; max-width: 900px; }
+  .col-left { display: flex; flex-direction: column; gap: 14px; }
+  .col-right { display: flex; flex-direction: column; gap: 14px; }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .card-header svg { flex-shrink: 0; opacity: 0.6; }
+  .card-body { padding: 16px; }
+
+  /* ── Drop zone ── */
+  .drop-zone {
+    border: 1.5px dashed rgba(255,255,255,0.12);
+    border-radius: var(--radius-sm);
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+  .drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .drop-icon {
+    width: 40px; height: 40px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 12px;
+    color: var(--text-muted);
+  }
+  .drop-label { font-size: 13px; color: var(--text-muted); }
+  .drop-exts { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-family: var(--mono); }
+
+  /* ── File info row ── */
+  .file-row {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .file-row.visible { display: flex; }
+  .file-row-icon { color: var(--accent); flex-shrink: 0; }
+  .file-row-name { flex: 1; font-size: 13px; word-break: break-all; }
+  .file-row-size { font-size: 11px; color: var(--text-muted); white-space: nowrap; font-family: var(--mono); }
+
+  /* ── Settings grid ── */
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { font-size: 11px; font-weight: 500; color: var(--text-muted); letter-spacing: 0.04em; }
+  .field select, .field input[type=text], .field input[type=number] {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    font-family: var(--mono);
+    padding: 7px 10px;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.15s;
+    width: 100%;
+  }
+  .field select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; }
+  .field select:focus, .field input:focus { border-color: var(--accent); }
+  .check-row { display: flex; align-items: center; gap: 8px; }
+  .check-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  .check-row label { font-size: 13px; color: var(--text); cursor: pointer; }
+
+  /* ── Info cards ── */
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .info-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+  }
+  .info-card .ic-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 4px; }
+  .info-card .ic-val { font-size: 15px; font-weight: 600; font-family: var(--mono); color: var(--text); }
+
+  /* ── Progress ── */
+  .progress-section { display: none; }
+  .progress-section.visible { display: block; }
+  .progress-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-bottom: 8px; font-family: var(--mono); }
+  .progress-track {
+    height: 4px;
+    background: var(--surface2);
+    border-radius: 99px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #818cf8);
+    border-radius: 99px;
+    width: 0%;
+    transition: width 0.3s ease;
+    position: relative;
+  }
+  .progress-fill::after {
+    content: '';
+    position: absolute;
+    right: 0; top: 0; bottom: 0;
+    width: 20px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4));
+  }
+
+  /* ── Status ── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-family: var(--mono);
+    border: 1px solid transparent;
+    transition: all 0.2s;
+  }
+  .status-idle { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
+  .status-running { background: var(--accent-dim); color: var(--accent); border-color: var(--border-accent); }
+  .status-success { background: var(--green-dim); color: var(--green); border-color: rgba(74,222,128,0.3); }
+  .status-error { background: var(--red-dim); color: var(--red); border-color: rgba(248,113,113,0.3); }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .status-dot.pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* ── Buttons ── */
+  .btn-row { display: flex; gap: 8px; }
+  .btn-start {
+    flex: 1;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #0e0f11;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: opacity 0.15s, transform 0.1s;
+    letter-spacing: 0.01em;
+  }
+  .btn-start:hover:not(:disabled) { opacity: 0.88; }
+  .btn-start:active:not(:disabled) { transform: scale(0.98); }
+  .btn-start:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-start.done { background: var(--green); }
+  .btn-reset {
+    padding: 10px 14px;
+    font-size: 13px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .btn-reset:hover { border-color: var(--border-accent); color: var(--text); }
+
+  /* ── Log ── */
+  .log-box {
+    background: #0a0b0d;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.7;
+    max-height: 220px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface2) transparent;
+  }
+  .log-box::-webkit-scrollbar { width: 4px; }
+  .log-box::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 2px; }
+  .log-ts { color: var(--text-dim); }
+  .log-ok { color: var(--green); }
+  .log-err { color: var(--red); }
+  .log-info { color: var(--accent); }
+  .log-warn { color: var(--amber); }
+  .log-plain { color: var(--text-muted); }
+
+  /* ── Step indicators ── */
+  .steps { display: flex; flex-direction: column; gap: 0; }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0;
+    position: relative;
+  }
+  .step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 30px;
+    bottom: -10px;
+    width: 1px;
+    background: var(--border);
+  }
+  .step.done::after { background: rgba(74,222,128,0.3); }
+  .step.active::after { background: rgba(56,189,248,0.3); }
+  .step-dot {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 600;
+    margin-top: 1px;
+    transition: all 0.2s;
+  }
+  .step.done .step-dot { background: var(--green-dim); border-color: rgba(74,222,128,0.4); color: var(--green); }
+  .step.active .step-dot { background: var(--accent-dim); border-color: var(--border-accent); color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .step-info { flex: 1; }
+  .step-name { font-size: 13px; font-weight: 500; color: var(--text); }
+  .step.done .step-name { color: var(--text-muted); }
+  .step-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  @media (max-width: 700px) {
+    .layout { grid-template-columns: 1fr; }
+    .col-right { order: -1; }
+    .settings-grid { grid-template-columns: 1fr; }
+    .info-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div style="max-width:900px;margin:0 auto;">
+
+  <div class="header">
+    <div class="header-icon">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    </div>
+    <div>
+      <div class="header-title">DFU Download Image Tool</div>
+      <div class="header-sub">Device Firmware Update — flash &amp; verify firmware images</div>
+    </div>
+    <span class="badge">v1.0</span>
+  </div>
+
+  <div class="layout">
+    <div class="col-left">
+
+      <!-- Firmware Image -->
+      <div class="card">
+        <div class="card-header">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          Firmware Image
+        </div>
+        <div class="card-body">
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept=".bin,.hex,.dfu,.zip">
+            <div class="drop-icon">
+              <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <div class="drop-label">Drop firmware file here or click to browse</div>
+            <div class="drop-exts">.bin &nbsp;/&nbsp; .hex &nbsp;/&nbsp; .dfu &nbsp;/&nbsp; .zip</div>
+          </div>
+          <div class="file-row" id="fileRow">
+            <svg class="file-row-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+            <span class="file-row-name" id="fileName">—</span>
+            <span class="file-row-size" id="fileSize"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- DFU Settings -->
+      <div class="card">
+        <div class="card-header">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg>
+          DFU Settings
+        </div>
+        <div class="card-body">
+          <div class="settings-grid">
+            <div class="field">
+              <label>DFU Mode</label>
+              <select id="dfuMode">
+                <option value="normal">Normal DFU</option>
+                <option value="secure">Secure DFU</option>
+                <option value="dual">Dual-bank</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Transport</label>
+              <select id="transport">
+                <option value="usb">USB</option>
+                <option value="ble">BLE</option>
+                <option value="uart">UART</option>
+                <option value="spi">SPI</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Start Address</label>
+              <input type="text" id="startAddr" value="0x08000000">
+            </div>
+            <div class="field">
+              <label>Packet Size (bytes)</label>
+              <select id="packetSize">
+                <option value="64">64</option>
+                <option value="128">128</option>
+                <option value="256" selected>256</option>
+                <option value="512">512</option>
+                <option value="1024">1024</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Timeout (ms)</label>
+              <input type="number" id="timeout" value="5000" min="500" max="30000" step="500">
+            </div>
+            <div class="field">
+              <label>Max Retries</label>
+              <input type="number" id="retries" value="3" min="0" max="10">
+            </div>
+            <div class="field full">
+              <div class="check-row">
+                <input type="checkbox" id="verifyChk">
+                <label for="verifyChk">Verify firmware after download (CRC-32 check)</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="card">
+        <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+          <div class="progress-section" id="progressSection">
+            <div class="progress-meta">
+              <span id="progressText">Initializing...</span>
+              <span id="progressPct">0%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+          </div>
+          <div class="status-bar status-idle" id="statusBar">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusMsg">Ready — select a firmware image to begin.</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn-start" id="btnStart" disabled>
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              Start DFU Download
+            </button>
+            <button class="btn-reset" id="btnReset">Reset</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="col-right">
+
+      <!-- Image Info -->
+      <div class="card" id="infoCard" style="display:none;">
+        <div class="card-header">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          Image Info
+        </div>
+        <div class="card-body">
+          <div class="info-grid">
+            <div class="info-card"><div class="ic-label">Size</div><div class="ic-val" id="infoSize">—</div></div>
+            <div class="info-card"><div class="ic-label">Packets</div><div class="ic-val" id="infoPackets">—</div></div>
+            <div class="info-card"><div class="ic-label">Format</div><div class="ic-val" id="infoFormat">—</div></div>
+            <div class="info-card"><div class="ic-label">CRC-32</div><div class="ic-val" id="infoCRC" style="font-size:11px;">—</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Steps -->
+      <div class="card">
+        <div class="card-header">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          Process Steps
+        </div>
+        <div class="card-body">
+          <div class="steps" id="stepsList">
+            <div class="step" id="step-0"><div class="step-dot">1</div><div class="step-info"><div class="step-name">Connect</div><div class="step-desc">Establish device connection</div></div></div>
+            <div class="step" id="step-1"><div class="step-dot">2</div><div class="step-info"><div class="step-name">Enter DFU mode</div><div class="step-desc">Switch to bootloader</div></div></div>
+            <div class="step" id="step-2"><div class="step-dot">3</div><div class="step-info"><div class="step-name">Erase flash</div><div class="step-desc">Clear target memory region</div></div></div>
+            <div class="step" id="step-3"><div class="step-dot">4</div><div class="step-info"><div class="step-name">Download image</div><div class="step-desc">Transfer firmware packets</div></div></div>
+            <div class="step" id="step-4"><div class="step-dot">5</div><div class="step-info"><div class="step-name">Verify &amp; reset</div><div class="step-desc">CRC check, boot new firmware</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="card">
+        <div class="card-header">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          Log
+        </div>
+        <div class="card-body" style="padding:12px;">
+          <div class="log-box" id="logBox">
+            <div><span class="log-ts">[00:00:00]</span> <span class="log-info">DFU tool ready. Select a firmware image.</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+let selectedFile = null;
+let isRunning = false;
+let simTimer = null;
+
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
+const fileRow = document.getElementById('fileRow');
+const fileName = document.getElementById('fileName');
+const fileSize = document.getElementById('fileSize');
+const btnStart = document.getElementById('btnStart');
+const btnReset = document.getElementById('btnReset');
+const statusBar = document.getElementById('statusBar');
+const statusDot = document.getElementById('statusDot');
+const statusMsg = document.getElementById('statusMsg');
+const progressSection = document.getElementById('progressSection');
+const progressFill = document.getElementById('progressFill');
+const progressPct = document.getElementById('progressPct');
+const progressText = document.getElementById('progressText');
+const logBox = document.getElementById('logBox');
+const infoCard = document.getElementById('infoCard');
+
+function fmt(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1048576).toFixed(2) + ' MB';
+}
+
+function fakeCRC(name) {
+  let h = 0xDEADBEEF;
+  for (let i = 0; i < name.length; i++) {
+    h = (h ^ name.charCodeAt(i)) >>> 0;
+    h = Math.imul(h, 0x9e3779b9) >>> 0;
+  }
+  return '0x' + h.toString(16).toUpperCase().padStart(8, '0');
+}
+
+function log(msg, type='plain') {
+  const line = document.createElement('div');
+  const ts = new Date().toLocaleTimeString('en-GB', {hour12:false});
+  line.innerHTML = `<span class="log-ts">[${ts}]</span> <span class="log-${type}">${msg}</span>`;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function setStatus(cls, msg, pulse=false) {
+  statusBar.className = 'status-bar status-' + cls;
+  statusMsg.textContent = msg;
+  statusDot.className = 'status-dot' + (pulse ? ' pulse' : '');
+}
+
+function setStep(idx, state) {
+  const el = document.getElementById('step-' + idx);
+  if (!el) return;
+  el.className = 'step ' + state;
+  const dot = el.querySelector('.step-dot');
+  if (state === 'done') dot.innerHTML = `<svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
+}
+
+function setProgress(pct, label) {
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = pct + '%';
+  progressText.textContent = label;
+}
+
+function loadFile(file) {
+  selectedFile = file;
+  fileName.textContent = file.name;
+  fileSize.textContent = fmt(file.size);
+  fileRow.classList.add('visible');
+  infoCard.style.display = 'block';
+
+  const ext = file.name.split('.').pop().toUpperCase();
+  const pktSize = parseInt(document.getElementById('packetSize').value);
+  const pkts = Math.ceil(file.size / pktSize);
+  document.getElementById('infoSize').textContent = fmt(file.size);
+  document.getElementById('infoPackets').textContent = pkts.toLocaleString();
+  document.getElementById('infoFormat').textContent = ext;
+  document.getElementById('infoCRC').textContent = fakeCRC(file.name);
+
+  btnStart.disabled = false;
+  setStatus('idle', 'Image ready: ' + file.name);
+  log('Image loaded: ' + file.name + ' (' + fmt(file.size) + ')', 'ok');
+  log('Format: ' + ext + ' | CRC-32: ' + fakeCRC(file.name), 'info');
+}
+
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0]; if (f) loadFile(f);
+});
+
+btnStart.addEventListener('click', () => {
+  if (isRunning || !selectedFile) return;
+  isRunning = true;
+  btnStart.disabled = true;
+
+  const mode = document.getElementById('dfuMode').value;
+  const transport = document.getElementById('transport').value.toUpperCase();
+  const addr = document.getElementById('startAddr').value;
+  const pktSize = parseInt(document.getElementById('packetSize').value);
+  const timeout = document.getElementById('timeout').value;
+  const retries = document.getElementById('retries').value;
+  const verify = document.getElementById('verifyChk').checked;
+  const totalPkts = Math.ceil(selectedFile.size / pktSize);
+
+  progressSection.classList.add('visible');
+  setProgress(0, 'Initializing...');
+  log('--- DFU session started ---', 'info');
+  log('Mode: ' + mode + ' | Transport: ' + transport + ' | Address: ' + addr, 'info');
+  log('Packets: ' + totalPkts + ' × ' + pktSize + 'B | Timeout: ' + timeout + 'ms | Retries: ' + retries, 'info');
+
+  // Reset steps
+  for (let i = 0; i < 5; i++) {
+    const el = document.getElementById('step-' + i);
+    if (el) { el.className = 'step'; el.querySelector('.step-dot').textContent = i+1; }
+  }
+
+  function delay(ms, fn) { simTimer = setTimeout(fn, ms); }
+
+  setStep(0, 'active');
+  setStatus('running', 'Connecting via ' + transport + '...', true);
+  setProgress(2, 'Connecting...');
+  log('Connecting via ' + transport + '...', 'warn');
+
+  delay(700, () => {
+    setStep(0, 'done'); setStep(1, 'active');
+    setStatus('running', 'Entering DFU mode...', true);
+    setProgress(6, 'Entering DFU mode...');
+    log('Device found. Entering ' + mode + ' DFU mode.', 'ok');
+
+    delay(600, () => {
+      setStep(1, 'done'); setStep(2, 'active');
+      setStatus('running', 'Erasing flash at ' + addr, true);
+      setProgress(10, 'Erasing flash...');
+      log('Erasing flash at ' + addr + '...', 'warn');
+
+      delay(1000, () => {
+        setStep(2, 'done'); setStep(3, 'active');
+        log('Erase complete.', 'ok');
+        runDownload(14, totalPkts, verify);
+      });
+    });
+  });
+
+  function runDownload(startPct, total, doVerify) {
+    let pkt = 0;
+    const maxPct = doVerify ? 80 : 94;
+    function tick() {
+      pkt++;
+      const pct = Math.round(startPct + (pkt / total) * (maxPct - startPct));
+      setProgress(pct, 'Downloading... ' + pkt + '/' + total + ' pkts');
+      setStatus('running', 'Downloading firmware... ' + pct + '%', true);
+      const milestone = Math.floor(total * 0.25);
+      if (pkt % Math.max(1, milestone) === 0 || pkt === total) {
+        log('Progress: ' + pkt + '/' + total + ' packets (' + pct + '%)', 'plain');
+      }
+      if (pkt < total) {
+        simTimer = setTimeout(tick, Math.max(6, 1400 / total));
+      } else {
+        log('Download complete.', 'ok');
+        setStep(3, 'done'); setStep(4, 'active');
+        if (doVerify) runVerify();
+        else finalize();
+      }
+    }
+    tick();
+  }
+
+  function runVerify() {
+    setStatus('running', 'Verifying firmware...', true);
+    setProgress(82, 'Verifying CRC...');
+    log('Verifying firmware integrity...', 'warn');
+    let p = 82;
+    const iv = setInterval(() => {
+      p += 3;
+      if (p >= 98) {
+        clearInterval(iv);
+        setProgress(98, 'Verification complete');
+        log('CRC-32 match: ' + document.getElementById('infoCRC').textContent + ' — OK', 'ok');
+        setTimeout(finalize, 400);
+      } else {
+        setProgress(p, 'Verifying... ' + p + '%');
+      }
+    }, 150);
+  }
+
+  function finalize() {
+    setStep(4, 'done');
+    setProgress(100, 'Complete');
+    setStatus('success', 'DFU download complete. Device rebooting...');
+    log('--- DFU session finished successfully ---', 'ok');
+    log('Device will reset and boot new firmware.', 'info');
+    isRunning = false;
+    btnStart.className = 'btn-start done';
+    btnStart.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Done';
+    btnStart.disabled = true;
+  }
+});
+
+btnReset.addEventListener('click', () => {
+  if (simTimer) clearTimeout(simTimer);
+  isRunning = false;
+  selectedFile = null;
+  fileInput.value = '';
+  fileRow.classList.remove('visible');
+  infoCard.style.display = 'none';
+  progressSection.classList.remove('visible');
+  progressFill.style.width = '0%';
+  btnStart.disabled = true;
+  btnStart.className = 'btn-start';
+  btnStart.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg> Start DFU Download';
+  setStatus('idle', 'Ready — select a firmware image to begin.');
+  logBox.innerHTML = '<div><span class="log-ts">[00:00:00]</span> <span class="log-info">Reset. Select a firmware image to start.</span></div>';
+  document.getElementById('startAddr').value = '0x08000000';
+  document.getElementById('timeout').value = '5000';
+  document.getElementById('retries').value = '3';
+  document.getElementById('dfuMode').value = 'normal';
+  document.getElementById('transport').value = 'usb';
+  document.getElementById('packetSize').value = '256';
+  document.getElementById('verifyChk').checked = false;
+  for (let i = 0; i < 5; i++) {
+    const el = document.getElementById('step-' + i);
+    if (el) { el.className = 'step'; el.querySelector('.step-dot').textContent = i+1; }
+  }
+});
+</script>
+</body>
+</html>
