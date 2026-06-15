@@ -772,7 +772,10 @@ btnStart.addEventListener('click', async () => {
     await usbDevice.controlTransferOut({
       requestType:'class', recipient:'interface',
       request: 0x01, value: 0, index: 0
-    }, new Uint8Array([0x21, ...addrBytes])); // 0x21 為 ST DFU Set Address Pointer 
+    }, new Uint8Array([0x21, ...addrBytes])); // 0x21 為 ST DFU Set Address Pointer
+    await pollDfuStatus(usbDevice);
+    // 額外再做一次 GETSTATUS 確保狀態機完全穩定後才開始寫入
+    await new Promise(r => setTimeout(r, 10));
     await pollDfuStatus(usbDevice);
 
     // ── Step 4: Download Packets ──
@@ -861,18 +864,16 @@ async function clearDfuStatus(device) {
 // ── 輪詢 DFU 狀態直至 Idle/DNLOAD-IDLE ─────────────────
 async function pollDfuStatus(device) {
   for (let i = 0; i < 60; i++) {
+    // 第一次只等 1ms，之後每次 2ms，HS mode 大多第一次就 idle
+    await new Promise(r => setTimeout(r,0));
     try {
       const res = await device.controlTransferIn({
-        requestType: 'class', recipient: 'interface',
+        requestType:'class', recipient:'interface',
         request: 0x03, value: 0, index: 0
       }, 6);
       const st = new Uint8Array(res.data.buffer);
-      // bwPollTimeout: bytes [1..3] little-endian，裝置建議等待時間 (ms)
-      const pollTimeout = st[1] | (st[2] << 8) | (st[3] << 16);
-      await new Promise(r => setTimeout(r, pollTimeout > 0 ? pollTimeout : 1));
       // st[4]: 2 = dfuDNLOAD-IDLE, 0 = dfuIDLE -> 完成
       if (st[4] === 0x02 || st[4] === 0x00) return;
-      // dfuDNBUSY -> 繼續 poll
     } catch(e) {
       break;
     }
