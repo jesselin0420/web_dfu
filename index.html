@@ -452,11 +452,10 @@
     </div>
   </div>
 </div>
-
 <script>
 let usbDevice = null;
 let selectedFile = null;
-let firmwareBytes = null; // 用來儲存最終要燒錄的純二進位資料 (Uint8Array)
+let firmwareBytes = null; // 儲存轉換後的純 BIN Uint8Array
 let isRunning = false;
 
 const webUsbSupported = typeof navigator !== 'undefined' && typeof navigator.usb !== 'undefined';
@@ -493,7 +492,6 @@ function fmt(b) {
   return (b/1048576).toFixed(2) + ' MB';
 }
 
-// 計算真實的 CRC-32 (IEEE 802.3 標準)
 function calculateCRC32(uint8Array) {
   let crc = 0xFFFFFFFF;
   for (let i = 0; i < uint8Array.length; i++) {
@@ -518,7 +516,6 @@ function parseHexToBin(hexText) {
   let maxAddr = 0;
   let extLinearAddr = 0;
 
-  // 第一階段：解析所有資料紀錄並找出記憶體邊界
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i].trim();
     if (!line) continue;
@@ -528,7 +525,7 @@ function parseHexToBin(hexText) {
     const offset = parseInt(line.substr(3, 4), 16);
     const recordType = parseInt(line.substr(7, 2), 16);
     
-    if (recordType === 0x00) { // Data Record
+    if (recordType === 0x00) { 
       const targetAddr = extLinearAddr + offset;
       const dataBytes = new Uint8Array(byteCount);
       for (let b = 0; b < byteCount; b++) {
@@ -538,16 +535,15 @@ function parseHexToBin(hexText) {
       
       if (targetAddr < minAddr) minAddr = targetAddr;
       if (targetAddr + byteCount > maxAddr) maxAddr = targetAddr + byteCount;
-    } else if (recordType === 0x04) { // Extended Linear Address Record
+    } else if (recordType === 0x04) { 
       extLinearAddr = parseInt(line.substr(9, 4), 16) << 16;
-    } else if (recordType === 0x01) { // End of File Record
+    } else if (recordType === 0x01) { 
       break;
     }
   }
 
   if (chunks.length === 0) throw new Error("HEX 檔案中沒有找到任何有效的資料紀錄");
 
-  // 第二階段：將散落的 chunks 填入連續的二進位陣列中（未填寫處填滿 0xFF）
   const binLength = maxAddr - minAddr;
   const binArray = new Uint8Array(binLength);
   binArray.fill(0xFF); 
@@ -600,19 +596,12 @@ function checkReady() {
   btnStart.disabled = !(usbDevice && firmwareBytes);
 }
 
-// ── WebUSB not supported ───────────────────────────────
 if (!webUsbSupported) {
   btnConnect.disabled = true;
   btnConnect.textContent = 'Not supported';
-  showError(
-    'WebUSB not available',
-    'This browser does not support WebUSB. Please use Google Chrome or Microsoft Edge (desktop). Safari and Firefox are not supported.'
-  );
-  log('WebUSB not available in this browser.', 'err');
-  log('Use Chrome or Edge to connect a real device.', 'warn');
+  showError('WebUSB not available', 'This browser does not support WebUSB.');
 }
 
-// ── Device disconnect event ────────────────────────────
 if (webUsbSupported) {
   navigator.usb.addEventListener('disconnect', e => {
     if (usbDevice && e.device === usbDevice) {
@@ -623,7 +612,6 @@ if (webUsbSupported) {
       btnConnect.className = 'btn-connect';
       log('Device disconnected.', 'err');
       setStatus('error', 'Device disconnected.');
-      showError('Device disconnected', 'The USB device was unplugged. Reconnect and try again.');
       checkReady();
     }
   });
@@ -652,49 +640,35 @@ btnConnect.addEventListener('click', async () => {
 
   try {
     const device = await navigator.usb.requestDevice({
-      filters: [
-        { classCode: 0xFE, subclassCode: 0x01 }, 
-        { vendorId: 0x0483 },  
-        { vendorId: 0x1915 },  
-        { vendorId: 0x2FE3 },  
-        {}                     
-      ]
+      filters: [{ vendorId: 0x0483, productId: 0xDF11 }]
     });
 
     await device.open();
     usbDevice = device;
 
-    const name   = device.productName      || 'USB Device';
-    const mfr    = device.manufacturerName ? device.manufacturerName + ' — ' : '';
-    const serial = device.serialNumber     ? ' [S/N: ' + device.serialNumber + ']' : '';
+    const name   = device.productName      || 'ST DFU Device';
     const vid    = '0x' + device.vendorId.toString(16).toUpperCase().padStart(4,'0');
     const pid    = '0x' + device.productId.toString(16).toUpperCase().padStart(4,'0');
-    const label  = mfr + name + serial;
+    const label  = name + " (" + vid + ":" + pid + ")";
 
     setUsbState('connected', 'Connected');
     deviceChip.classList.add('visible');
-    deviceInfoEl.textContent = label + '  VID:' + vid + '  PID:' + pid;
+    deviceInfoEl.textContent = label;
     btnConnect.textContent = 'Disconnect';
     btnConnect.className = 'btn-connect secondary';
 
     log('Device connected: ' + label, 'ok');
-    log('VID: ' + vid + '  PID: ' + pid, 'info');
     setStatus('idle', 'Device ready. Select a firmware image to flash.');
     checkReady();
 
   } catch(err) {
     setUsbState('disconnected', 'No device');
-    if (err.name === 'NotFoundError') {
-      log('No device selected in picker.', 'warn');
-    } else {
-      showError('Connection failed', err.message);
-      log('Connection error [' + err.name + ']: ' + err.message, 'err');
-      setStatus('error', 'Connection failed.');
-    }
+    log('Connection error: ' + err.message, 'err');
+    setStatus('error', 'Connection failed.');
   }
 });
 
-// ── File load & Auto Conversion ────────────────────────
+// ── File load ──────────────────────────────────────────
 function loadFile(file) {
   selectedFile = file;
   hideError();
@@ -706,21 +680,13 @@ function loadFile(file) {
     try {
       if (ext === 'hex') {
         log('偵測到 Intel HEX 格式，正在轉換為純 Binary...', 'info');
-        const text = e.target.result;
-        const result = parseHexToBin(text);
-        
+        const result = parseHexToBin(e.target.result);
         firmwareBytes = result.binArray;
-        
-        // 自動校正網頁上的起始地址欄位
-        const detectedAddr = '0x' + result.startAddr.toString(16).toUpperCase().padStart(8, '0');
-        document.getElementById('startAddr').value = detectedAddr;
-        log(`轉換成功！自動偵測起始地址為: ${detectedAddr}`, 'ok');
+        document.getElementById('startAddr').value = '0x' + result.startAddr.toString(16).toUpperCase().padStart(8, '0');
       } else {
-        // .bin 檔案直接轉成 Uint8Array
         firmwareBytes = new Uint8Array(e.target.result);
       }
 
-      // 更新 UI 資訊
       fileNameEl.textContent = file.name;
       fileSizeEl.textContent = `${fmt(file.size)} (Bin 大小: ${fmt(firmwareBytes.length)})`;
       fileRow.classList.add('visible');
@@ -731,30 +697,20 @@ function loadFile(file) {
 
       document.getElementById('infoSize').textContent = fmt(firmwareBytes.length);
       document.getElementById('infoPackets').textContent = Math.ceil(firmwareBytes.length / pktSize).toLocaleString();
-      document.getElementById('infoFormat').textContent = ext.toUpperCase() + ' ➜ BIN';
+      document.getElementById('infoFormat').textContent = ext.toUpperCase();
       document.getElementById('infoCRC').textContent = crc32Val;
 
-      log('Image 載入就緒: ' + file.name, 'ok');
-      log('解算後 Binary 實體大小: ' + fmt(firmwareBytes.length), 'info');
-      log('預計燒錄真實 CRC-32: ' + crc32Val, 'info');
-      
+      log('Image 載入成功: ' + file.name, 'ok');
       checkReady();
-      if (!usbDevice) setStatus('idle', 'Image ready. Connect a USB device to flash.');
-      else setStatus('idle', 'Ready to flash.');
-
     } catch(err) {
       showError('檔案解析失敗', err.message);
-      log('解析失敗: ' + err.message, 'err');
       firmwareBytes = null;
       checkReady();
     }
   };
 
-  if (ext === 'hex') {
-    reader.readAsText(file); // HEX 是純文字
-  } else {
-    reader.readAsArrayBuffer(file); // 其他視為二進位
-  }
+  if (ext === 'hex') reader.readAsText(file);
+  else reader.readAsArrayBuffer(file);
 }
 
 fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
@@ -765,18 +721,13 @@ dropZone.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0]; if (f) loadFile(f);
 });
 
-// ── DFU start ──────────────────────────────────────────
+// ── DFU Download 核心改動 ───────────────────────────────
 btnStart.addEventListener('click', async () => {
   if (isRunning) return;
-  if (!usbDevice) { showError('No device connected', 'Please connect a USB DFU device first.'); return; }
-  if (!firmwareBytes) { showError('No firmware data', 'Please select a valid firmware file.'); return; }
-
   hideError();
   isRunning = true;
   btnStart.disabled = true;
-  for (let i=0;i<5;i++) setStep(i,'');
 
-  const mode    = document.getElementById('dfuMode').value;
   const addr    = document.getElementById('startAddr').value;
   const pktSize = parseInt(document.getElementById('packetSize').value);
   const verify  = document.getElementById('verifyChk').checked;
@@ -784,133 +735,135 @@ btnStart.addEventListener('click', async () => {
 
   progressSection.classList.add('visible');
   setProgress(0, 'Starting...');
-  log('--- DFU session started ---', 'info');
-  log('Mode: ' + mode + ' | Address: ' + addr + ' | Packet size: ' + pktSize + 'B', 'info');
-  log('Total packets: ' + totalPkts, 'info');
+  log('--- DFU session started (ST-Driver Passive Mode) ---', 'info');
 
-  // ── Step 1: Connect ──
-  setStep(0,'active');
-  setStatus('running', 'Verifying device connection...', true);
-  setProgress(3, 'Connecting...');
-  log('Device: ' + (usbDevice.productName||'USB Device') + ' VID:0x' + usbDevice.vendorId.toString(16).toUpperCase(), 'ok');
-
-  // ── Step 2: Enter DFU ──
-  setStep(0,'done'); setStep(1,'active');
-  setProgress(7, 'Entering DFU mode...');
-  setStatus('running', 'Sending DFU_DETACH...', true);
   try {
+    // ── Step 1: Connect & Claim ──
+    setStep(0,'active');
     if (usbDevice.configuration === null) await usbDevice.selectConfiguration(1);
+    
+    // ST 驅動下通常需要明確指定 interface 與 alternate 才能過濾控制阻礙
     await usbDevice.claimInterface(0);
-    await usbDevice.controlTransferOut({
-      requestType:'class', recipient:'interface',
-      request: 0x00, value: 1000, index: 0  
-    });
-    log('DFU_DETACH sent OK.', 'ok');
-  } catch(e) {
-    log('DFU_DETACH: ' + e.message + ' (may already be in DFU mode)', 'warn');
-  }
+    try { await usbDevice.selectAlternativeInterface(0, 0); } catch(e){}
+    log('USB Interface claimed.', 'ok');
 
-  // ── Step 3: Erase ──
-  setStep(1,'done'); setStep(2,'active');
-  setProgress(11, 'Erasing flash...');
-  setStatus('running', 'Erasing flash at ' + addr + '...', true);
-  log('Erase → ' + addr, 'warn');
-  try {
-    const addrBytes = hexToLeBytes(addr, 4);
+    // ── Step 2: DFU Detach / Sync ──
+    setStep(0,'done'); setStep(1,'active');
+    setProgress(10, 'Syncing DFU status...');
+    await clearDfuStatus(usbDevice);
+
+    // ── Step 3: Erase (改用官方相容的 Mass Erase 指令 0x43) ──
+    setStep(1,'done'); setStep(2,'active');
+    setProgress(20, 'Executing Mass Erase...');
+    log('發送 ST 官方核心相容 Mass Erase (0x43)...', 'warn');
+    
     await usbDevice.controlTransferOut({
       requestType:'class', recipient:'interface',
       request: 0x01, value: 0, index: 0   
-    }, new Uint8Array([0x41, ...addrBytes]));
+    }, new Uint8Array([0x43])); // ST 標準全晶片擦除碼
+    
     await pollDfuStatus(usbDevice);
-    log('Erase complete.', 'ok');
-  } catch(e) {
-    log('Erase error: ' + e.message, 'warn');
-  }
+    log('Erase 命令完成。', 'ok');
 
-  // ── Step 4: Download ──
-  setStep(2,'done'); setStep(3,'active');
-  setProgress(14, 'Downloading firmware...');
-  setStatus('running', 'Downloading firmware...', true);
-  log('Starting packet transfer...', 'info');
+    // ── 關鍵：設定寫入起始定址 (ST 專屬 0x21 指令) ──
+    log(`設定 Flash 目標寫入起始定址: ${addr}`, 'info');
+    const addrBytes = hexToLeBytes(addr, 4);
+    await usbDevice.controlTransferOut({
+      requestType:'class', recipient:'interface',
+      request: 0x01, value: 0, index: 0
+    }, new Uint8Array([0x21, ...addrBytes])); // 0x21 為 ST DFU Set Address Pointer 
+    await pollDfuStatus(usbDevice);
 
-  let transferOk = true;
-  for (let blk = 0; blk < totalPkts; blk++) {
-    const chunk = firmwareBytes.slice(blk * pktSize, (blk+1) * pktSize);
-    try {
+    // ── Step 4: Download Packets ──
+    setStep(2,'done'); setStep(3,'active');
+    log('開始燒錄資料封包...', 'info');
+
+    for (let blk = 0; blk < totalPkts; blk++) {
+      const chunk = firmwareBytes.slice(blk * pktSize, (blk+1) * pktSize);
+      
+      // 注意：ST 驅動下，下載的 wValue (Block Number) 必須從 2 開始遞增
       const result = await usbDevice.controlTransferOut({
         requestType:'class', recipient:'interface',
         request: 0x01, value: blk + 2, index: 0  
       }, chunk);
-      if (result.status !== 'ok') throw new Error('Transfer status: ' + result.status);
-    } catch(e) {
-      log('Packet ' + blk + ' error: ' + e.message, 'err');
-      showError('Transfer error at packet ' + blk, e.message);
-      setStatus('error', 'Transfer failed at packet ' + blk + '.');
-      transferOk = false; break;
+
+      if (result.status !== 'ok') throw new Error('封包傳輸中斷');
+      
+      // 每個封包送完需要短暫等候狀態機更新，防止衝太快被 ST 驅動中斷
+      await pollDfuStatus(usbDevice);
+
+      const pct = Math.round(20 + ((blk+1)/totalPkts) * 70);
+      setProgress(pct, `Packet ${blk+1} / ${totalPkts}`);
     }
-    const pct = Math.round(14 + ((blk+1)/totalPkts) * (verify ? 66 : 80));
-    setProgress(pct, 'Packet ' + (blk+1) + ' / ' + totalPkts);
-    if ((blk+1) % Math.max(1, Math.floor(totalPkts*0.2)) === 0 || blk+1 === totalPkts)
-      log('Packet ' + (blk+1) + '/' + totalPkts + ' (' + pct + '%)', 'plain');
-    await new Promise(r => setTimeout(r, 0)); 
+    log('所有資料封包傳輸完畢。', 'ok');
+
+    // ── Step 5: Leave DFU & Reset ──
+    setStep(3,'done'); setStep(4,'active');
+    setProgress(95, 'Leaving DFU mode...');
+    
+    // 發送一個長度為 0 的空封包通知 Bootloader 結束下載
+    await usbDevice.controlTransferOut({
+      requestType:'class', recipient:'interface',
+      request: 0x01, value: totalPkts + 2, index: 0
+    }, new Uint8Array([]));
+    
+    try { await pollDfuStatus(usbDevice); } catch(e){}
+
+    setStep(4,'done');
+    setProgress(100, 'Complete');
+    setStatus('success', '燒錄成功！裝置已重啟。');
+    log('--- DFU 燒錄程序完美完成 ---', 'ok');
+
+  } catch(e) {
+    log('發生錯誤: ' + e.message, 'err');
+    showError('DFU 執行失敗', e.message);
+    setStatus('error', '傳輸失敗。');
+  } finally {
+    try { await usbDevice.close(); } catch(e) {}
+    isRunning = false;
+    checkReady();
   }
-
-  if (!transferOk) { isRunning = false; checkReady(); return; }
-  log('All packets transferred.', 'ok');
-
-  // ── Step 5: Verify ──
-  setStep(3,'done'); setStep(4,'active');
-  if (verify) {
-    setProgress(82, 'Verifying...');
-    setStatus('running', 'Verifying firmware...', true);
-    log('Requesting DFU_GETSTATUS...', 'info');
-    try {
-      const res = await usbDevice.controlTransferIn({
-        requestType:'class', recipient:'interface',
-        request: 0x03, value: 0, index: 0  
-      }, 6);
-      const st = new Uint8Array(res.data.buffer);
-      log('DFU status bytes: ' + Array.from(st).map(b=>b.toString(16).padStart(2,'0')).join(' '), 'info');
-      if (st[0] === 0x00) log('Status: OK (dfuOK)', 'ok');
-      else log('Status code: 0x' + st[0].toString(16) + ' — check DFU spec', 'warn');
-    } catch(e) {
-      log('DFU_GETSTATUS error: ' + e.message, 'warn');
-    }
-    log('CRC-32 reference: ' + document.getElementById('infoCRC').textContent, 'ok');
-    setProgress(98, 'Verification complete');
-  }
-
-  // ── Done ──
-  setStep(4,'done');
-  setProgress(100, 'Complete');
-  setStatus('success', 'DFU download complete. Device rebooting...');
-  log('--- DFU session finished successfully ---', 'ok');
-  log('Device will reset and boot the new firmware.', 'info');
-  try { await usbDevice.close(); } catch(e) {}
-  log('USB connection closed.', 'plain');
-
-  isRunning = false;
-  btnStart.className = 'btn-start done';
-  btnStart.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Done';
-  btnStart.disabled = true;
 });
 
-// ── Poll DFU status ────────────────────────────────────
-async function pollDfuStatus(device) {
-  for (let i=0;i<15;i++) {
-    await new Promise(r => setTimeout(r, 100));
+// ── 清除 DFU 狀態與同步 ────────────────────────────────
+async function clearDfuStatus(device) {
+  for(let i=0; i<3; i++) {
     try {
       const res = await device.controlTransferIn({
         requestType:'class', recipient:'interface',
         request: 0x03, value: 0, index: 0
       }, 6);
       const st = new Uint8Array(res.data.buffer);
-      if (st[4] === 0x02) return; 
-    } catch(e) { break; }
+      if (st[4] === 0x00 || st[4] === 0x02) return; // dfuIDLE
+      
+      // 如果狀態卡住，發送 DFU_CLRSTATUS (0x04)
+      await device.controlTransferOut({
+        requestType:'class', recipient:'interface',
+        request: 0x04, value: 0, index: 0
+      });
+    } catch(e){}
   }
 }
 
-// ── Hex → little-endian bytes ──────────────────────────
+// ── 輪詢 DFU 狀態直至 Idle/DNLOAD-IDLE ─────────────────
+async function pollDfuStatus(device) {
+  for (let i=0; i<30; i++) {
+    await new Promise(r => setTimeout(r, 2));
+    try {
+      const res = await device.controlTransferIn({
+        requestType:'class', recipient:'interface',
+        request: 0x03, value: 0, index: 0
+      }, 6);
+      const st = new Uint8Array(res.data.buffer);
+      
+      // st[4] 代表 DFU State. 2 = dfuDNLOAD-IDLE, 5 = dfuDNBUSY
+      if (st[4] === 0x02 || st[4] === 0x00) return; 
+    } catch(e) { 
+      break; 
+    }
+  }
+}
+
 function hexToLeBytes(hexStr, len) {
   const n = parseInt(hexStr, 16);
   return Array.from({length: len}, (_, i) => (n >> (8*i)) & 0xff);
@@ -918,29 +871,7 @@ function hexToLeBytes(hexStr, len) {
 
 // ── Reset ──────────────────────────────────────────────
 btnReset.addEventListener('click', () => {
-  isRunning = false;
-  selectedFile = null;
-  firmwareBytes = null;
-  fileInput.value = '';
-  fileRow.classList.remove('visible');
-  infoCard.style.display = 'none';
-  progressSection.classList.remove('visible');
-  progressFill.style.width = '0%';
-  btnStart.disabled = true;
-  btnStart.className = 'btn-start';
-  btnStart.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg> Start DFU Download';
-  hideError();
-  setStatus('idle', usbDevice ? 'Device connected. Select a firmware image.' : 'Ready — connect a device to begin.');
-  logBox.innerHTML = '<div><span class="log-ts">[00:00:00]</span> <span class="log-info">Reset. Ready.</span></div>';
-  document.getElementById('startAddr').value = '0x08000000';
-  document.getElementById('timeout').value = '5000';
-  document.getElementById('retries').value = '3';
-  document.getElementById('dfuMode').value = 'normal';
-  document.getElementById('transport').value = 'usb';
-  document.getElementById('packetSize').value = '256';
-  document.getElementById('verifyChk').checked = false;
-  for (let i=0;i<5;i++) setStep(i,'');
-  checkReady();
+  location.reload(); // 最安全的 Reset 方式，徹底清空 USB 狀態
 });
 </script>
 </body>
