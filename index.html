@@ -756,15 +756,44 @@ btnStart.addEventListener('click', async () => {
     // ── Step 3: Erase (改用官方相容的 Mass Erase 指令 0x43) ──
     setStep(1,'done'); setStep(2,'active');
     setProgress(20, 'Executing Mass Erase...');
-    log('發送 ST 官方核心相容 Mass Erase (0x43)...', 'warn');
-    
-    await usbDevice.controlTransferOut({
-      requestType:'class', recipient:'interface',
-      request: 0x01, value: 0, index: 0   
-    }, new Uint8Array([0x43])); // ST 標準全晶片擦除碼
-    
-    await pollDfuStatus(usbDevice);
-    log('Erase 命令完成。', 'ok');
+    // 根據 image 大小動態計算需要 erase 的 sector 數
+    // STM32U5G9: sector size = 8KB = 0x2000，從 0x08000000 開始
+    const SECTOR_SIZE = 0x2000; // 8KB
+    const FLASH_BASE  = parseInt(addr, 16);
+    const numSectors  = Math.ceil(firmwareBytes.length / SECTOR_SIZE);
+    log(`根據 image 大小動態 Erase ${numSectors} sectors (${(numSectors * SECTOR_SIZE / 1024).toFixed(0)} KB)...`, 'warn');
+
+    for (let sec = 0; sec < numSectors; sec++) {
+      const secAddr = FLASH_BASE + sec * SECTOR_SIZE;
+      const secAddrBytes = [secAddr&0xFF,(secAddr>>8)&0xFF,(secAddr>>16)&0xFF,(secAddr>>24)&0xFF];
+
+      // Step 1: 送 Sector Erase 指令
+      await usbDevice.controlTransferOut({
+        requestType:'class', recipient:'interface',
+        request: 0x01, value: 0, index: 0
+      }, new Uint8Array([0x41, ...secAddrBytes]));
+
+      // Step 2: GETSTATUS 觸發執行，讀取裝置建議等待時間 bwPollTimeout
+      const trigRes = await usbDevice.controlTransferIn({
+        requestType:'class', recipient:'interface',
+        request: 0x03, value: 0, index: 0
+      }, 6);
+      const trigSt = new Uint8Array(trigRes.data.buffer);
+      const pollTimeout = trigSt[1] | (trigSt[2] << 8) | (trigSt[3] << 16);
+
+      // Step 3: 等裝置說的時間
+      if (pollTimeout > 0) await new Promise(r => setTimeout(r, pollTimeout));
+
+      // Step 4: 確認完成
+      await pollDfuStatus(usbDevice, 20, 5);
+
+      if ((sec + 1) % 20 === 0 || sec === numSectors - 1) {
+        const pct = Math.round(10 + ((sec+1)/numSectors) * 10);
+        setProgress(pct, `Erasing sector ${sec+1} / ${numSectors}`);
+        log(`Erase 進度: ${sec+1}/${numSectors}`, 'info');
+      }
+    }
+    log('Erase 完成。', 'ok');
 
     // ── 關鍵：設定寫入起始定址 (ST 專屬 0x21 指令) ──
     log(`設定 Flash 目標寫入起始定址: ${addr}`, 'info');
@@ -862,19 +891,23 @@ async function clearDfuStatus(device) {
 }
 
 // ── 輪詢 DFU 狀態直至 Idle/DNLOAD-IDLE ─────────────────
-async function pollDfuStatus(device) {
-  for (let i = 0; i < 60; i++) {
-    // 第一次只等 1ms，之後每次 2ms，HS mode 大多第一次就 idle
-    await new Promise(r => setTimeout(r,0));
+async function pollDfuStatus(device, maxRetries = 60, intervalMs = 0) {
+  for (let i = 0; i < maxRetries; i++) {
+    await new Promise(r => setTimeout(r, intervalMs));
     try {
       const res = await device.controlTransferIn({
         requestType:'class', recipient:'interface',
         request: 0x03, value: 0, index: 0
       }, 6);
       const st = new Uint8Array(res.data.buffer);
-      // st[4]: 2 = dfuDNLOAD-IDLE, 0 = dfuIDLE -> 完成
-      if (st[4] === 0x02 || st[4] === 0x00) return;
+      const state = st[4];
+      // dfuDNLOAD-IDLE(2) 或 dfuIDLE(0) -> 完成
+      if (state === 0x02 || state === 0x00) return;
+      // dfuERROR(0x0A) -> 拋出錯誤
+      if (state === 0x0A) throw new Error(`DFU Error state: status=0x${st[0].toString(16)}`);
+      // dfuDNBUSY(5) 或其他 -> 繼續等
     } catch(e) {
+      if (e.message.startsWith('DFU Error')) throw e;
       break;
     }
   }
